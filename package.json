@@ -1,0 +1,22 @@
+{
+  "name": "legionella-dossier",
+  "private": true,
+  "version": "0.1.0",
+  "description": "In-house Legionella compliance dossier: HSG274 planned preventive maintenance fed by Bluetooth temperature probes",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "dev": "pnpm -r --parallel dev",
+    "start": "pnpm --filter @ld/api start",
+    "e2e": "node scripts/e2e-smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1",
+    "typescript": "^5.9.3"
+  }
+}

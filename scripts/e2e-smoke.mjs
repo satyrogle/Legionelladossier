@@ -1,0 +1,169 @@
+/**
+ * End-to-end smoke test: boots the built API with a seeded demo estate, drives the built web app in
+ * headless Chromium with the simulated probe, completes a hot sentinel task online and a cold sentinel
+ * task offline (queued, then synced), and checks the dossier through the API.
+ *
+ * Run `pnpm build` first. Screenshots land in $E2E_OUT (default: ./test-results).
+ */
+import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const port = Number(process.env.E2E_PORT ?? 3100);
+const base = `http://localhost:${port}`;
+const out = process.env.E2E_OUT ?? path.join(root, 'test-results');
+mkdirSync(out, { recursive: true });
+const tmp = mkdtempSync(path.join(tmpdir(), 'ld-e2e-'));
+
+const api = spawn(process.execPath, ['--no-warnings=ExperimentalWarning', path.join(root, 'apps/api/dist/index.js')], {
+  env: { ...process.env, PORT: String(port), DB_PATH: path.join(tmp, 'e2e.db'), WEB_DIST: path.join(root, 'apps/web/dist'), SEED_DEMO: 'true' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let apiLog = '';
+api.stdout.on('data', (d) => (apiLog += d));
+api.stderr.on('data', (d) => (apiLog += d));
+
+const checks = [];
+function check(name, ok, detail = '') {
+  checks.push({ name, ok, detail });
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
+  if (!ok) throw new Error(`Check failed: ${name} ${detail}`);
+}
+
+async function waitForApi(ms) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try {
+      const r = await fetch(`${base}/api/health`);
+      if (r.ok) return;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`API did not start:\n${apiLog}`);
+}
+
+async function json(url) {
+  const r = await fetch(`${base}${url}`);
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return r.json();
+}
+
+async function pollUntil(fn, ms) {
+  const t0 = Date.now();
+  let last;
+  while (Date.now() - t0 < ms) {
+    last = await fn();
+    if (last) return last;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return last;
+}
+
+let browser;
+try {
+  await waitForApi(20_000);
+  const sites = await json('/api/sites');
+  check('demo estate seeded', sites.length === 2, `${sites.length} sites`);
+  const hq = sites.find((s) => s.code === 'DEMO-HQ');
+
+  browser = await chromium.launch();
+  const context = await browser.newContext({ viewport: { width: 412, height: 915 }, deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(e.message));
+
+  // Dashboard
+  await page.goto(`${base}/`);
+  await page.getByRole('heading', { name: 'Sites' }).waitFor();
+  await page.getByText('Demo estate: head office').waitFor();
+  await page.screenshot({ path: path.join(out, '01-dashboard.png') });
+  check('dashboard renders demo sites', true);
+
+  // Connect the simulated probe, sped up so the smoke test does not wait a real minute.
+  await page.getByRole('link', { name: 'Probe', exact: true }).click();
+  await page.evaluate(() => localStorage.setItem('ld.simSpeed', '10'));
+  await page.getByTestId('sim-scenario').selectOption('hot-pass');
+  await page.getByTestId('use-simulator').click();
+  await page.locator('.statusline').getByText(/Simulated probe \(hot-pass\): /).waitFor({ timeout: 10_000 });
+  check('simulated probe streams into the status bar', true);
+
+  // Open a hot sentinel task via client-side navigation so the probe stays connected.
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  const hotTasks = await json(`/api/tasks?siteId=${hq.id}&status=open&templateCode=HWS-SENTINEL`);
+  check('open hot sentinel tasks exist', hotTasks.length > 0, `${hotTasks.length}`);
+  const hotLink = page.getByRole('link', { name: new RegExp(`Hot sentinel outlet temperature.*${hotTasks[0].assetName.replace(/[()]/g, '\\$&')}`) }).first();
+  await hotLink.click();
+  await page.getByRole('heading', { name: 'Hot sentinel outlet temperature' }).waitFor();
+  await page.getByPlaceholder('Your name (kept on this device)').fill('Smoke test engineer');
+
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await page.locator('.pill', { hasText: /target at \d+ s/ }).waitFor({ timeout: 30_000 });
+  await page.screenshot({ path: path.join(out, '02-task-run-live.png') });
+  await page.getByText(/^Recorded /).waitFor({ timeout: 60_000 });
+  check('probe run auto-recorded a reading', true);
+  await page.getByRole('button', { name: 'Complete task' }).click();
+  await page.locator('.pill', { hasText: 'completed' }).first().waitFor({ timeout: 10_000 });
+  await page.screenshot({ path: path.join(out, '03-task-completed.png') });
+
+  const hotDetail = await json(`/api/tasks/${hotTasks[0].id}`);
+  check('task completed as pass through the API', hotDetail.task.status === 'completed' && hotDetail.task.outcome === 'pass', `${hotDetail.task.status}/${hotDetail.task.outcome}`);
+  const r = hotDetail.readings[0];
+  check('reading came from the probe with timing and trace', r?.source === 'simulator' && r.reachedTargetAtS !== null && r.reachedTargetAtS < 60 && (r.samples?.length ?? 0) > 10, `value ${r?.valueC} °C, target at ${r?.reachedTargetAtS} s, ${r?.samples?.length} samples`);
+  check('engineer name stored', hotDetail.task.completedBy === 'Smoke test engineer');
+
+  // Offline: a cold sentinel task recorded without a network, then synced.
+  await page.getByRole('link', { name: 'Probe', exact: true }).click();
+  await page.getByTestId('sim-scenario').selectOption('cold-pass');
+  await page.getByTestId('use-simulator').click();
+  await page.locator('.statusline').getByText(/Simulated probe \(cold-pass\): /).waitFor({ timeout: 10_000 });
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  const coldTasks = await json(`/api/tasks?siteId=${hq.id}&status=open&templateCode=CWS-SENTINEL`);
+  check('open cold sentinel tasks exist', coldTasks.length > 0, `${coldTasks.length}`);
+  await page.getByRole('link', { name: new RegExp(`Cold sentinel outlet temperature.*${coldTasks[0].assetName.replace(/[()]/g, '\\$&')}`) }).first().click();
+  await page.getByRole('heading', { name: 'Cold sentinel outlet temperature' }).waitFor();
+
+  await context.setOffline(true);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await page.getByText(/^Offline:/).waitFor({ timeout: 5000 });
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await page.getByText(/^Recorded /).waitFor({ timeout: 60_000 });
+  await page.getByText(/queued for sync/).waitFor({ timeout: 5000 });
+  check('offline reading queued locally', true);
+  await page.getByRole('button', { name: 'Complete task' }).click();
+  await page.getByText(/2 changes queued for sync/).waitFor({ timeout: 5000 });
+  await page.screenshot({ path: path.join(out, '04-offline-queued.png') });
+
+  const beforeSync = await json(`/api/tasks/${coldTasks[0].id}`);
+  check('server has nothing yet while offline', beforeSync.readings.length === 0 && beforeSync.task.status !== 'completed');
+
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  const synced = await pollUntil(async () => {
+    const d = await json(`/api/tasks/${coldTasks[0].id}`);
+    return d.task.status === 'completed' ? d : null;
+  }, 15_000);
+  check('queue replayed after reconnect', Boolean(synced), synced ? `${synced.task.outcome}, ${synced.readings.length} reading` : 'not synced');
+  check('cold reading passed the 20 °C / 2 minute rule', synced?.task.outcome === 'pass' && synced.readings[0]?.reachedTargetAtS < 120);
+
+  // Dossier export contains both runs.
+  const csv = await (await fetch(`${base}/api/sites/${hq.id}/export.csv`)).text();
+  check('dossier CSV export includes the probe readings', csv.includes('Smoke test engineer') && csv.includes('simulator'));
+
+  check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
+  console.log(`\nAll ${checks.length} checks passed. Screenshots in ${out}`);
+} catch (err) {
+  console.error('\nSMOKE TEST FAILED:', err instanceof Error ? err.message : err);
+  if (apiLog) console.error('--- api log ---\n' + apiLog.slice(-2000));
+  process.exitCode = 1;
+} finally {
+  await browser?.close();
+  api.kill('SIGTERM');
+  rmSync(tmp, { recursive: true, force: true });
+}

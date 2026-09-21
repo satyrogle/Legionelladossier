@@ -1,0 +1,28 @@
+{
+  "name": "@ld/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "REST API and SQLite store for the Legionella dossier",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx watch src/index.ts",
+    "start": "node --no-warnings=ExperimentalWarning dist/index.js",
+    "seed": "tsx src/seed-cli.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/static": "^10.1.4",
+    "@ld/core": "workspace:*",
+    "fastify": "^5.12.5",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
