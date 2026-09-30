@@ -155,7 +155,7 @@ export function SitePage() {
                     <div className="asset-sub">{[ASSET_TYPE_LABELS[a.type], where].filter(Boolean).join(' · ')}</div>
                     {a.classification && <div className="asset-sub">TRIRIGA class: {a.classification}</div>}
                     {a.type === 'return_loop' && (
-                      <select value={a.loopRank ?? ''} onChange={(e) => void patchAsset(a, { loopRank: e.target.value as LoopRank })} style={{ marginTop: 4, maxWidth: 200 }} aria-label="Loop rank">
+                      <select value={a.loopRank ?? ''} onChange={(e) => void patchAsset(a, { loopRank: e.target.value as LoopRank })} style={{ marginTop: 4, maxWidth: 220, fontSize: 13, padding: '6px 4px' }} aria-label="Loop rank">
                         <option value="principal">Principal (monthly)</option>
                         <option value="subordinate">Subordinate (quarterly)</option>
                         <option value="tertiary">Tertiary (annual)</option>
