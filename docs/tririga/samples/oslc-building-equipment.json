@@ -1,0 +1,38 @@
+{
+  "oslc:responseInfo": {
+    "oslc:totalCount": 3,
+    "rdf:about": "https://tririga.example.invalid/oslc/spq/triAPICOutboundAssetQC?oslc.select=*"
+  },
+  "rdfs:member": [
+    {
+      "spi:triIdTX": "DA-EQ-0005",
+      "spi:triNameTX": "Annex WC basin",
+      "spi:triSpecNameTX": "Wash Hand Basin",
+      "spi:triStatusCL": "Active",
+      "spi:triPrimaryLocPathTX": "\\Locations\\Demo Estate\\Demo Annex\\First\\1.03 WC",
+      "spi:triBarCodeEntryTX": "",
+      "dcterms:identifier": "135900001",
+      "rdf:about": "https://tririga.example.invalid/oslc/so/triAPICOutboundAssetRS/135900001"
+    },
+    {
+      "spi:triIdTX": "DA-EQ-0006",
+      "spi:triNameTX": "Annex cleaners sink",
+      "spi:triSpecNameTX": "Cleaners Sink - Little Used",
+      "spi:triStatusCL": "Active",
+      "spi:triPrimaryLocPathTX": "\\Locations\\Demo Estate\\Demo Annex\\First\\1.04 Cleaners Cupboard",
+      "spi:triBarCodeEntryTX": "",
+      "dcterms:identifier": "135900002",
+      "rdf:about": "https://tririga.example.invalid/oslc/so/triAPICOutboundAssetRS/135900002"
+    },
+    {
+      "spi:triIdTX": "DA-EQ-0007",
+      "spi:triNameTX": "Annex cold water tank",
+      "spi:triSpecNameTX": "Cold Water Storage Tank",
+      "spi:triStatusCL": "Active",
+      "spi:triPrimaryLocPathTX": "\\Locations\\Demo Estate\\Demo Annex\\Roof\\R.01 Tank Room",
+      "spi:triBarCodeEntryTX": "",
+      "dcterms:identifier": "135900003",
+      "rdf:about": "https://tririga.example.invalid/oslc/so/triAPICOutboundAssetRS/135900003"
+    }
+  ]
+}

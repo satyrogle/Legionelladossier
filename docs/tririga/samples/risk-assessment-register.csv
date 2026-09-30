@@ -1,0 +1,4 @@
+Asset Ref,Outlet Type,Building,Floor,Room,Sentinel (Y/N),Little Used (Y/N)
+RA-001,Hot tap,Demo Annex,First,1.10 Office kitchenette,N,N
+RA-002,Cold tap,Demo Annex,First,1.10 Office kitchenette,N,N
+RA-003,Shower,Demo Annex,First,1.12 Shower room,N,Y

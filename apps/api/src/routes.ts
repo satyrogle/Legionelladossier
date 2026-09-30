@@ -3,6 +3,10 @@ import { z } from 'zod';
 import type { Channel, TaskStatus } from '@ld/core';
 import {
   ASSET_TYPES,
+  IMPORT_FIELDS,
+  MAX_IMPORT_ROWS,
+  toDelimited,
+  writeXlsx,
   CHANNEL_LABELS,
   FREQUENCIES,
   PPM_TEMPLATES,
@@ -15,6 +19,8 @@ import {
   todayIso,
 } from '@ld/core';
 import type { Db } from './db.js';
+import { assetRegisterRows, resultsRows } from './exporter.js';
+import { applyImport, planFromDb } from './importer.js';
 import {
   HttpError,
   deleteAsset,
@@ -27,6 +33,9 @@ import {
   exportRows,
   getAsset,
   insertAsset,
+  listDueSchedules,
+  listImportBatches,
+  syncSchedulesForAsset,
   insertReading,
   insertSite,
   insertTasks,
@@ -72,8 +81,47 @@ const assetInput = z.object({
   loopRank: z.enum(['principal', 'subordinate', 'tertiary']).optional(),
   notes: z.string().optional(),
   active: z.boolean().optional(),
+  floor: z.string().optional(),
+  space: z.string().optional(),
+  serial: z.string().optional(),
+  classification: z.string().optional(),
   autoSchedule: z.boolean().optional(),
 });
+
+const importFieldKeys = IMPORT_FIELDS.map((f) => f.key) as [string, ...string[]];
+const importBody = z.object({
+  headers: z.array(z.string().max(500)).max(500),
+  rows: z.array(z.array(z.string().max(4000)).max(500)).max(MAX_IMPORT_ROWS),
+  mapping: z.partialRecord(z.enum(importFieldKeys), z.number().int().min(0).max(499)),
+  options: z.object({
+    mode: z.enum(['assets', 'locations']),
+    classMap: z.record(z.string(), z.union([z.enum(ASSET_TYPES), z.literal('skip')])).optional(),
+    pathBuildingIndex: z.number().int().min(0).max(10).optional(),
+    targetSiteId: z.string().optional(),
+    updateTypes: z.boolean().optional(),
+    system: z.enum(['tririga', 'other']).optional(),
+  }),
+  filename: z.string().max(300).optional(),
+  importedBy: z.string().max(200).optional(),
+  generateTasks: z.boolean().optional(),
+});
+
+const IMPORT_BODY_LIMIT = 60 * 1024 * 1024;
+const PREVIEW_ROWS = 500;
+
+const EXPORT_TYPES = {
+  txt: { contentType: 'text/plain; charset=utf-8', ext: 'txt' },
+  csv: { contentType: 'text/csv; charset=utf-8', ext: 'csv' },
+  xlsx: { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' },
+} as const;
+type ExportFormat = keyof typeof EXPORT_TYPES;
+
+function encodeTable(rows: string[][], format: ExportFormat, sheetName: string): Buffer {
+  if (format === 'xlsx') return Buffer.from(writeXlsx(rows, sheetName));
+  const text = toDelimited(rows, format === 'txt' ? '\t' : ',');
+  // Excel needs the BOM to read UTF-8 CSV (°C, accents) correctly; Data Integrator text stays plain.
+  return Buffer.from(format === 'csv' ? `\ufeff${text}` : text, 'utf8');
+}
 
 const readingInput = z.object({
   channel: z.enum(channels),
@@ -182,8 +230,8 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
   app.patch<IdParams>('/api/assets/:id', async (req) => {
     const { autoSchedule = false, ...patch } = assetInput.partial().parse(req.body);
     const asset = updateAsset(db, req.params.id, patch);
-    if (autoSchedule) ensureSchedulesForAsset(db, asset);
-    return asset;
+    const schedules = autoSchedule ? syncSchedulesForAsset(db, asset) : undefined;
+    return { ...asset, schedules };
   });
 
   app.delete<IdParams>('/api/assets/:id', async (req, reply) => {
@@ -224,7 +272,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
     const from = body.from ?? today;
     const to = body.to ?? today;
     if (from > to) throw new HttpError(400, '`from` must not be after `to`');
-    const schedules = listSchedules(db, { siteId: req.params.id });
+    const schedules = listDueSchedules(db, req.params.id);
     const created = insertTasks(db, generateTasks(schedules, from, to, existingTaskKeys(db, req.params.id)));
     return { created: created.length, from, to };
   });
@@ -344,6 +392,53 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteContext): void {
     const csv = toCsv(exportRows(db, site.id, q.from, q.to));
     const name = `${(site.code ?? site.name).replace(/[^A-Za-z0-9_-]+/g, '_')}-dossier.csv`;
     return reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="${name}"`).send(csv);
+  });
+
+  // ----- TRIRIGA import / export -----
+  app.post('/api/import/tririga/preview', { bodyLimit: IMPORT_BODY_LIMIT }, async (req) => {
+    const body = importBody.parse(req.body);
+    const plan = planFromDb(db, body);
+    return { ...plan, assets: plan.assets.slice(0, PREVIEW_ROWS), truncated: plan.assets.length > PREVIEW_ROWS };
+  });
+
+  app.post('/api/import/tririga/commit', { bodyLimit: IMPORT_BODY_LIMIT }, async (req, reply) => {
+    const body = importBody.parse(req.body);
+    const result = applyImport(db, body, resolveToday(ctx, req.query));
+    return reply.code(201).send({
+      batch: result.batch,
+      summary: result.plan.summary,
+      warnings: result.plan.warnings,
+      siteIds: result.siteIds,
+      tasksCreated: result.tasksCreated,
+      schedules: result.schedules,
+    });
+  });
+
+  app.get('/api/import/batches', async () => listImportBatches(db));
+
+  app.get<{ Params: { format: string } }>('/api/export/tririga/assets.:format', async (req, reply) => {
+    const format = z.enum(['txt', 'csv', 'xlsx']).parse(req.params.format);
+    const q = z.object({ siteId: z.string().optional(), profile: z.enum(['readable', 'tririga']).optional() }).parse(req.query);
+    const site = q.siteId ? requireSite(db, q.siteId) : undefined;
+    const profile = q.profile ?? (format === 'txt' ? 'tririga' : 'readable');
+    const rows = assetRegisterRows(db, site?.id, profile);
+    const base = `${site ? (site.code ?? site.name).replace(/[^A-Za-z0-9_-]+/g, '_') : 'all-sites'}-asset-register${profile === 'tririga' ? '-tririga' : ''}`;
+    return reply
+      .header('content-type', EXPORT_TYPES[format].contentType)
+      .header('content-disposition', `attachment; filename="${base}.${EXPORT_TYPES[format].ext}"`)
+      .send(encodeTable(rows, format, 'Asset register'));
+  });
+
+  app.get<{ Params: { format: string } }>('/api/export/tririga/results.:format', async (req, reply) => {
+    const format = z.enum(['txt', 'csv', 'xlsx']).parse(req.params.format);
+    const q = z.object({ siteId: z.string().optional(), from: isoDate.optional(), to: isoDate.optional(), all: z.enum(['true', 'false']).optional() }).parse(req.query);
+    const site = q.siteId ? requireSite(db, q.siteId) : undefined;
+    const rows = resultsRows(db, { siteId: site?.id, from: q.from, to: q.to, completedOnly: q.all !== 'true' });
+    const base = `${site ? (site.code ?? site.name).replace(/[^A-Za-z0-9_-]+/g, '_') : 'all-sites'}-ppm-results${q.from ? `-${q.from}` : ''}${q.to ? `-to-${q.to}` : ''}`;
+    return reply
+      .header('content-type', EXPORT_TYPES[format].contentType)
+      .header('content-disposition', `attachment; filename="${base}.${EXPORT_TYPES[format].ext}"`)
+      .send(encodeTable(rows, format, 'PPM results'));
   });
 
   function taskDetail(id: string, today: string) {

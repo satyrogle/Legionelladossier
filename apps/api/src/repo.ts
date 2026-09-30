@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Asset, Frequency, PpmSchedule, Reading, Site, Task, TaskStatus } from '@ld/core';
-import { deriveStatus, getTemplate, templatesForAsset } from '@ld/core';
+import { csvSafe, deriveStatus, getTemplate, templatesForAsset } from '@ld/core';
 import { all, bool, num, one, run, str, v, type Db, type Row } from './db.js';
 
 export class HttpError extends Error {
@@ -25,6 +25,10 @@ function rowToSite(r: Row): Site {
     address: str(r, 'address'),
     healthcare: bool(r, 'healthcare'),
     responsiblePerson: str(r, 'responsible_person'),
+    property: str(r, 'property'),
+    externalSystem: str(r, 'external_system'),
+    externalRef: str(r, 'external_ref'),
+    externalPath: str(r, 'external_path'),
     createdAt: String(r.created_at),
   };
 }
@@ -50,7 +54,8 @@ export function insertSite(db: Db, input: SiteInput): Site {
   const id = randomUUID();
   run(
     db,
-    'INSERT INTO sites (id, name, code, client, address, healthcare, responsible_person, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    `INSERT INTO sites (id, name, code, client, address, healthcare, responsible_person, property, external_system, external_ref, external_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.name,
     v(input.code),
@@ -58,6 +63,10 @@ export function insertSite(db: Db, input: SiteInput): Site {
     v(input.address),
     v(input.healthcare ?? false),
     v(input.responsiblePerson),
+    v(input.property),
+    v(input.externalSystem),
+    v(input.externalRef),
+    v(input.externalPath),
     now(),
   );
   return getSite(db, id)!;
@@ -68,13 +77,18 @@ export function updateSite(db: Db, id: string, patch: Partial<SiteInput>): Site 
   const next = { ...s, ...patch };
   run(
     db,
-    'UPDATE sites SET name = ?, code = ?, client = ?, address = ?, healthcare = ?, responsible_person = ? WHERE id = ?',
+    `UPDATE sites SET name = ?, code = ?, client = ?, address = ?, healthcare = ?, responsible_person = ?, property = ?, external_system = ?, external_ref = ?, external_path = ?
+     WHERE id = ?`,
     next.name,
     v(next.code),
     v(next.client),
     v(next.address),
     v(next.healthcare),
     v(next.responsiblePerson),
+    v(next.property),
+    v(next.externalSystem),
+    v(next.externalRef),
+    v(next.externalPath),
     id,
   );
   return getSite(db, id)!;
@@ -100,6 +114,14 @@ function rowToAsset(r: Row): Asset {
     loopRank: str(r, 'loop_rank') as Asset['loopRank'],
     notes: str(r, 'notes'),
     active: bool(r, 'active'),
+    floor: str(r, 'floor'),
+    space: str(r, 'space'),
+    serial: str(r, 'serial'),
+    classification: str(r, 'classification'),
+    externalSystem: str(r, 'external_system'),
+    externalRef: str(r, 'external_ref'),
+    externalRecordId: str(r, 'external_record_id'),
+    externalPath: str(r, 'external_path'),
     createdAt: String(r.created_at),
   };
 }
@@ -111,7 +133,11 @@ export type AssetInput = Omit<Asset, 'id' | 'siteId' | 'createdAt' | 'sentinel' 
 };
 
 export function listAssets(db: Db, siteId: string): Asset[] {
-  return all(db, 'SELECT * FROM assets WHERE site_id = ? ORDER BY location, name', siteId).map(rowToAsset);
+  return all(db, 'SELECT * FROM assets WHERE site_id = ? ORDER BY floor, space, location, name', siteId).map(rowToAsset);
+}
+
+export function listAllAssets(db: Db): Asset[] {
+  return all(db, 'SELECT * FROM assets').map(rowToAsset);
 }
 
 export function getAsset(db: Db, id: string): Asset | undefined {
@@ -130,7 +156,9 @@ export function insertAsset(db: Db, siteId: string, input: AssetInput): Asset {
   const id = randomUUID();
   run(
     db,
-    'INSERT INTO assets (id, site_id, type, name, location, tag, sentinel, little_used, loop_rank, notes, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    `INSERT INTO assets (id, site_id, type, name, location, tag, sentinel, little_used, loop_rank, notes, active, floor, space, serial, classification,
+                         external_system, external_ref, external_record_id, external_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     siteId,
     input.type,
@@ -142,6 +170,14 @@ export function insertAsset(db: Db, siteId: string, input: AssetInput): Asset {
     v(input.loopRank),
     v(input.notes),
     v(input.active ?? true),
+    v(input.floor),
+    v(input.space),
+    v(input.serial),
+    v(input.classification),
+    v(input.externalSystem),
+    v(input.externalRef),
+    v(input.externalRecordId),
+    v(input.externalPath),
     now(),
   );
   return getAsset(db, id)!;
@@ -152,7 +188,9 @@ export function updateAsset(db: Db, id: string, patch: Partial<AssetInput>): Ass
   const next = { ...a, ...patch };
   run(
     db,
-    'UPDATE assets SET type = ?, name = ?, location = ?, tag = ?, sentinel = ?, little_used = ?, loop_rank = ?, notes = ?, active = ? WHERE id = ?',
+    `UPDATE assets SET type = ?, name = ?, location = ?, tag = ?, sentinel = ?, little_used = ?, loop_rank = ?, notes = ?, active = ?,
+                       floor = ?, space = ?, serial = ?, classification = ?, external_system = ?, external_ref = ?, external_record_id = ?, external_path = ?
+     WHERE id = ?`,
     next.type,
     next.name,
     v(next.location),
@@ -162,9 +200,25 @@ export function updateAsset(db: Db, id: string, patch: Partial<AssetInput>): Ass
     v(next.loopRank),
     v(next.notes),
     v(next.active),
+    v(next.floor),
+    v(next.space),
+    v(next.serial),
+    v(next.classification),
+    v(next.externalSystem),
+    v(next.externalRef),
+    v(next.externalRecordId),
+    v(next.externalPath),
     id,
   );
   return getAsset(db, id)!;
+}
+
+/** Move an asset (and its schedules and task history) to another site, e.g. when TRIRIGA re-parents it. */
+export function moveAsset(db: Db, id: string, siteId: string): void {
+  requireSite(db, siteId);
+  run(db, 'UPDATE assets SET site_id = ? WHERE id = ?', siteId, id);
+  run(db, 'UPDATE schedules SET site_id = ? WHERE asset_id = ?', siteId, id);
+  run(db, 'UPDATE tasks SET site_id = ? WHERE asset_id = ?', siteId, id);
 }
 
 export function deleteAsset(db: Db, id: string): void {
@@ -240,6 +294,43 @@ export function deleteSchedule(db: Db, id: string): void {
 /** Create the default HSG274 schedules an asset needs, keeping any that already exist. */
 export function ensureSchedulesForAsset(db: Db, asset: Asset): PpmSchedule[] {
   return templatesForAsset(asset).map((t) => upsertSchedule(db, asset.id, t.code));
+}
+
+/**
+ * Bring an asset's schedules in line with its current type and flags: add or re-activate the ones
+ * that apply, deactivate the rest. Frequencies set by the risk assessment and task history are kept.
+ */
+export function syncSchedulesForAsset(db: Db, asset: Asset): { activated: number; deactivated: number } {
+  const wanted = new Set(asset.active ? templatesForAsset(asset).map((t) => t.code) : []);
+  const current = listSchedules(db, { assetId: asset.id });
+  let activated = 0;
+  let deactivated = 0;
+  for (const code of wanted) {
+    const existing = current.find((s) => s.templateCode === code);
+    if (!existing) {
+      upsertSchedule(db, asset.id, code);
+      activated += 1;
+    } else if (!existing.active) {
+      run(db, 'UPDATE schedules SET active = 1 WHERE id = ?', existing.id);
+      activated += 1;
+    }
+  }
+  for (const s of current) {
+    if (s.active && !wanted.has(s.templateCode)) {
+      run(db, 'UPDATE schedules SET active = 0 WHERE id = ?', s.id);
+      deactivated += 1;
+    }
+  }
+  return { activated, deactivated };
+}
+
+/** Active schedules on active assets: the ones that should produce tasks. */
+export function listDueSchedules(db: Db, siteId: string): PpmSchedule[] {
+  return all(
+    db,
+    'SELECT s.* FROM schedules s JOIN assets a ON a.id = s.asset_id WHERE s.site_id = ? AND s.active = 1 AND a.active = 1 ORDER BY s.asset_id, s.template_code',
+    siteId,
+  ).map(rowToSchedule);
 }
 
 // ---------- tasks ----------
@@ -516,6 +607,49 @@ export function deleteDevice(db: Db, id: string): void {
   if (run(db, 'DELETE FROM devices WHERE id = ?', id) === 0) throw new HttpError(404, `Device ${id} not found`);
 }
 
+// ---------- import batches ----------
+
+export interface ImportBatch {
+  id: string;
+  source: string;
+  mode: string;
+  filename?: string;
+  importedBy?: string;
+  createdAt: string;
+  summary: unknown;
+  options?: unknown;
+}
+
+export function insertImportBatch(db: Db, batch: Omit<ImportBatch, 'id' | 'createdAt'>): ImportBatch {
+  const id = randomUUID();
+  run(
+    db,
+    'INSERT INTO import_batches (id, source, mode, filename, imported_by, created_at, summary, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    id,
+    batch.source,
+    batch.mode,
+    v(batch.filename),
+    v(batch.importedBy),
+    now(),
+    JSON.stringify(batch.summary),
+    v(batch.options),
+  );
+  return listImportBatches(db).find((b) => b.id === id)!;
+}
+
+export function listImportBatches(db: Db, limit = 50): ImportBatch[] {
+  return all(db, 'SELECT * FROM import_batches ORDER BY created_at DESC LIMIT ?', limit).map((r) => ({
+    id: String(r.id),
+    source: String(r.source),
+    mode: String(r.mode),
+    filename: str(r, 'filename'),
+    importedBy: str(r, 'imported_by'),
+    createdAt: String(r.created_at),
+    summary: JSON.parse(String(r.summary)),
+    options: r.options ? JSON.parse(String(r.options)) : undefined,
+  }));
+}
+
 // ---------- export ----------
 
 export interface ExportRow {
@@ -597,6 +731,9 @@ export function toCsv(rows: readonly ExportRow[]): string {
     'site', 'assetTag', 'asset', 'location', 'taskCode', 'task', 'periodStart', 'dueDate', 'status', 'outcome', 'completedAt', 'completedBy',
     'channel', 'valueC', 'minC', 'maxC', 'reachedTargetAtS', 'durationS', 'source', 'device', 'takenAt', 'notes',
   ];
-  const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const esc = (raw: string) => {
+    const s = csvSafe(raw);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
   return [headers.join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\n') + '\n';
 }

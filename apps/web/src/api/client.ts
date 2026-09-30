@@ -1,4 +1,4 @@
-import type { Asset, ComplianceSummary, Evaluation, Frequency, PpmSchedule, PpmTemplate, Reading, Site, Task, TaskStatus } from '@ld/core';
+import type { Asset, AssetType, ColumnMapping, ComplianceSummary, Evaluation, Frequency, ImportOptions, ImportPlan, PpmSchedule, PpmTemplate, Reading, Site, Task, TaskStatus } from '@ld/core';
 
 export interface SiteRow extends Site {
   assetCount: number;
@@ -61,6 +61,43 @@ export interface ComplianceReport {
 
 export type ReadingInput = Omit<Reading, 'id' | 'taskId' | 'assetId' | 'takenAt'> & { takenAt?: string };
 
+export interface ImportRequestBody {
+  headers: string[];
+  rows: string[][];
+  mapping: ColumnMapping;
+  options: ImportOptions;
+  filename?: string;
+  importedBy?: string;
+  generateTasks?: boolean;
+}
+
+export interface ImportPreview extends ImportPlan {
+  truncated: boolean;
+}
+
+export interface ImportBatchRecord {
+  id: string;
+  source: string;
+  mode: string;
+  filename?: string;
+  importedBy?: string;
+  createdAt: string;
+  summary: ImportPlan['summary'] & { tasksCreated?: number };
+}
+
+export interface ImportCommitResult {
+  batch: ImportBatchRecord;
+  summary: ImportPlan['summary'];
+  warnings: string[];
+  siteIds: string[];
+  tasksCreated: number;
+  schedules: { activated: number; deactivated: number };
+}
+
+export type ExportFormat = 'xlsx' | 'csv' | 'txt';
+
+export type { AssetType };
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -105,7 +142,8 @@ export const api = {
 
   createAsset: (siteId: string, input: Partial<Asset> & { type: Asset['type']; name: string }) =>
     request<{ asset: Asset; schedules: PpmSchedule[] }>('POST', `/api/sites/${siteId}/assets`, input),
-  updateAsset: (id: string, patch: Partial<Asset> & { autoSchedule?: boolean }) => request<Asset>('PATCH', `/api/assets/${id}`, patch),
+  updateAsset: (id: string, patch: Partial<Asset> & { autoSchedule?: boolean }) =>
+    request<Asset & { schedules?: { activated: number; deactivated: number } }>('PATCH', `/api/assets/${id}`, patch),
   deleteAsset: (id: string) => request<void>('DELETE', `/api/assets/${id}`),
 
   schedules: (siteId: string) => request<ScheduleRow[]>('GET', `/api/sites/${siteId}/schedules`),
@@ -129,4 +167,10 @@ export const api = {
 
   compliance: (siteId: string) => request<ComplianceReport>('GET', `/api/sites/${siteId}/compliance`),
   exportUrl: (siteId: string) => `${BASE}/api/sites/${siteId}/export.csv`,
+
+  importPreview: (body: ImportRequestBody) => request<ImportPreview>('POST', '/api/import/tririga/preview', body),
+  importCommit: (body: ImportRequestBody) => request<ImportCommitResult>('POST', '/api/import/tririga/commit', body),
+  importBatches: () => request<ImportBatchRecord[]>('GET', '/api/import/batches'),
+  tririgaAssetsUrl: (format: ExportFormat, siteId?: string) => `${BASE}/api/export/tririga/assets.${format}${q({ siteId })}`,
+  tririgaResultsUrl: (format: ExportFormat, opts: { siteId?: string; from?: string; to?: string } = {}) => `${BASE}/api/export/tririga/results.${format}${q(opts)}`,
 };

@@ -9,3 +9,4 @@ export * from './ble/eti.js';
 export * from './ble/standard.js';
 export * from './ble/drivers.js';
 export * from './readings/capture.js';
+export * from './integrations/index.js';

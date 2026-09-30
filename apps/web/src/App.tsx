@@ -4,6 +4,7 @@ import { AssetForm } from './pages/AssetForm.jsx';
 import { CompliancePage } from './pages/CompliancePage.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { DevicesPage } from './pages/DevicesPage.jsx';
+import { ImportPage } from './pages/ImportPage.jsx';
 import { SitePage } from './pages/SitePage.jsx';
 import { TaskRunPage } from './pages/TaskRunPage.jsx';
 import { TasksPage } from './pages/TasksPage.jsx';
@@ -22,6 +23,7 @@ export function App() {
             </NavLink>
             <NavLink to="/tasks">Tasks</NavLink>
             <NavLink to="/devices">Probe</NavLink>
+            <NavLink to="/import">TRIRIGA</NavLink>
           </nav>
           <ProbeBar />
         </div>
@@ -35,6 +37,7 @@ export function App() {
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/tasks/:taskId" element={<TaskRunPage />} />
           <Route path="/devices" element={<DevicesPage />} />
+          <Route path="/import" element={<ImportPage />} />
           <Route path="*" element={<p>Page not found.</p>} />
         </Routes>
       </main>

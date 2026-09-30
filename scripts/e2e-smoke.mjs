@@ -1,7 +1,8 @@
 /**
  * End-to-end smoke test: boots the built API with a seeded demo estate, drives the built web app in
- * headless Chromium with the simulated probe, completes a hot sentinel task online and a cold sentinel
- * task offline (queued, then synced), and checks the dossier through the API.
+ * headless Chromium with the simulated probe, completes a hot sentinel task online, a second one with
+ * the probe button only, and a cold sentinel task offline (queued, then synced); then imports a
+ * TRIRIGA export through the UI and downloads the TRIRIGA exports. Checks everything through the API.
  *
  * Run `pnpm build` first. Screenshots land in $E2E_OUT (default: ./test-results).
  */
@@ -118,6 +119,31 @@ try {
   check('reading came from the probe with timing and trace', r?.source === 'simulator' && r.reachedTargetAtS !== null && r.reachedTargetAtS < 60 && (r.samples?.length ?? 0) > 10, `value ${r?.valueC} °C, target at ${r?.reachedTargetAtS} s, ${r?.samples?.length} samples`);
   check('engineer name stored', hotDetail.task.completedBy === 'Smoke test engineer');
 
+  // Second hot sentinel, driven only by the probe's MEASURE/TRANSFER button (simulated).
+  await page.getByRole('link', { name: 'Probe', exact: true }).click();
+  await page.getByTestId('sim-scenario').selectOption('hot-pass');
+  await page.getByTestId('use-simulator').click();
+  await page.getByTestId('sim-button').click();
+  await page.getByTestId('button-status').getByText(/1 press received/).waitFor({ timeout: 5000 });
+  check('probe page registers a button press', true);
+  await page.screenshot({ path: path.join(out, '05-probe-page.png'), fullPage: true });
+
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  const hot2 = hotTasks[1];
+  await page.getByRole('link', { name: new RegExp(`Hot sentinel outlet temperature.*${hot2.assetName.replace(/[()]/g, '\\$&')}`) }).first().click();
+  await page.getByRole('heading', { name: 'Hot sentinel outlet temperature' }).waitFor();
+  await page.getByTestId('button-hint').getByText('Press the probe button to start the run.').waitFor();
+  await page.getByTestId('sim-probe-button').click();
+  await page.getByRole('button', { name: 'Record now' }).waitFor({ timeout: 5000 });
+  await page.locator('.pill', { hasText: /target at \d+ s/ }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('sim-probe-button').click();
+  await page.getByText(/^Recorded /).waitFor({ timeout: 10_000 });
+  check('button starts and records a run', true);
+  await page.getByRole('button', { name: 'Complete task' }).click();
+  await page.locator('.pill', { hasText: 'completed' }).first().waitFor({ timeout: 10_000 });
+  const hot2Detail = await json(`/api/tasks/${hot2.id}`);
+  check('button-driven run stored as a pass', hot2Detail.task.outcome === 'pass' && hot2Detail.readings[0]?.reachedTargetAtS < 60, `${hot2Detail.task.outcome}, target at ${hot2Detail.readings[0]?.reachedTargetAtS} s`);
+
   // Offline: a cold sentinel task recorded without a network, then synced.
   await page.getByRole('link', { name: 'Probe', exact: true }).click();
   await page.getByTestId('sim-scenario').selectOption('cold-pass');
@@ -155,6 +181,41 @@ try {
   // Dossier export contains both runs.
   const csv = await (await fetch(`${base}/api/sites/${hq.id}/export.csv`)).text();
   check('dossier CSV export includes the probe readings', csv.includes('Smoke test engineer') && csv.includes('simulator'));
+
+  // TRIRIGA import through the UI, using the sample building equipment report (Excel, title rows above the header).
+  await page.getByRole('link', { name: 'TRIRIGA', exact: true }).click();
+  await page.getByRole('heading', { name: 'TRIRIGA import and export' }).waitFor();
+  await page.getByTestId('import-file').setInputFiles(path.join(root, 'docs/tririga/samples/building-equipment-report.xlsx'));
+  const summary = page.getByTestId('import-summary');
+  await summary.getByText('new assets').waitFor({ timeout: 15_000 });
+  const newAssets = Number(await summary.locator('.stat', { hasText: 'new assets' }).locator('b').textContent());
+  const newSites = Number(await summary.locator('.stat', { hasText: 'new sites' }).locator('b').textContent());
+  check('import preview reads the TRIRIGA export', newAssets === 19 && newSites === 2, `${newSites} sites, ${newAssets} assets`);
+  await page.getByTestId('class-Wash Hand Basin').selectOption('skip');
+  await summary.locator('.stat', { hasText: 'new assets' }).locator('b').getByText('18', { exact: true }).waitFor({ timeout: 10_000 });
+  check('changing a classification re-plans the preview', true);
+  await page.screenshot({ path: path.join(out, '06-tririga-preview.png'), fullPage: true });
+  await page.getByTestId('import-commit').click();
+  await page.getByTestId('import-result').waitFor({ timeout: 15_000 });
+
+  const sitesAfter = await json('/api/sites');
+  const house = sitesAfter.find((s) => s.code === 'DH-01');
+  check('import created the TRIRIGA buildings as sites', Boolean(house) && sitesAfter.some((s) => s.code === 'DA-02') && house.externalRef === 'id:DH-01', `${sitesAfter.length} sites`);
+  const houseDetail = await json(`/api/sites/${house.id}`);
+  const cal = houseDetail.assets.find((a) => a.externalRef === 'id:DH-EQ-0001');
+  check('assets carry TRIRIGA IDs, floor and space', cal?.type === 'calorifier' && cal.floor === 'Basement' && cal.space === 'B.01 Plant Room', cal ? `${cal.type} ${cal.floor}/${cal.space}` : 'missing');
+  const houseTasks = await json(`/api/tasks?siteId=${house.id}&status=open`);
+  check('import scheduled this period’s HSG274 tasks', houseTasks.some((t) => t.templateCode === 'HWS-SENTINEL') && houseTasks.some((t) => t.templateCode === 'CAL-FLOW-RETURN'), `${houseTasks.length} open tasks`);
+
+  await page.getByTestId('import-result').getByRole('link', { name: 'Demo House' }).click();
+  await page.getByRole('heading', { name: 'Demo House' }).waitFor();
+  await page.screenshot({ path: path.join(out, '07-imported-site.png'), fullPage: true });
+
+  const di = await (await fetch(`${base}/api/export/tririga/assets.txt?siteId=${house.id}`)).text();
+  check('Data Integrator export uses TRIRIGA field names and IDs', di.startsWith('triIdTX\ttriNameTX') && di.includes('DH-EQ-0001\tCalorifier 1'));
+  const xlsx = await fetch(`${base}/api/export/tririga/results.xlsx`);
+  const bytes = new Uint8Array(await xlsx.arrayBuffer());
+  check('PPM results export downloads as Excel', xlsx.ok && bytes[0] === 0x50 && bytes[1] === 0x4b);
 
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
   console.log(`\nAll ${checks.length} checks passed. Screenshots in ${out}`);

@@ -1,0 +1,3 @@
+ID,Name,Parent Property,Address,City,Postcode,Path
+DH-01,Demo House,Demo Estate,1 Example Road,Exampleton,XX1 1XX,\Locations\Demo Estate\Demo House
+DA-02,Demo Annex,Demo Estate,3 Example Road,Exampleton,XX1 1XY,\Locations\Demo Estate\Demo Annex

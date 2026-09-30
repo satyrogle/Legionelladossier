@@ -27,6 +27,14 @@ export interface Site {
   /** Healthcare premises follow HTM 04-01: hot targets rise from 50 °C to 55 °C. */
   healthcare: boolean;
   responsiblePerson?: string;
+  /** Parent property / campus in the client's IWMS (TRIRIGA). */
+  property?: string;
+  /** Source system for imported records, e.g. "tririga". */
+  externalSystem?: string;
+  /** Stable key in the source system (building ID), used to update rather than duplicate on re-import. */
+  externalRef?: string;
+  /** Hierarchy path in the source system, e.g. \Locations\Property\Building. */
+  externalPath?: string;
   createdAt: IsoDateTime;
 }
 
@@ -78,6 +86,17 @@ export interface Asset {
   loopRank?: LoopRank;
   notes?: string;
   active: boolean;
+  floor?: string;
+  space?: string;
+  serial?: string;
+  /** Classification / spec name as the source system has it (e.g. TRIRIGA triSpecNameTX). */
+  classification?: string;
+  externalSystem?: string;
+  /** Stable key in the source system (TRIRIGA asset ID), used to update rather than duplicate on re-import. */
+  externalRef?: string;
+  /** Source system record ID (TRIRIGA spec_id / triRecordIdSY). */
+  externalRecordId?: string;
+  externalPath?: string;
   createdAt: IsoDateTime;
 }
 

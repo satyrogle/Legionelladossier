@@ -24,32 +24,44 @@ stores the trace in the dossier. It keeps working offline and syncs when the sig
   **dossier CSV export** with every reading, device and engineer.
 - **Offline first**: readings, completions and skips queue in the browser and replay in order.
 - **Manual entry fallback** for outlets the probe cannot reach, clearly labelled as manual.
+- **TRIRIGA import and export**: buildings and building equipment come in from TRIRIGA exports (Excel, CSV, Data Integrator text or OSLC JSON) and stay linked by TRIRIGA ID; the asset register and PPM results go back as Excel or Data Integrator files. See [docs/tririga.md](docs/tririga.md).
 
 ## Supported thermometers
 
 | Driver | Devices | Protocol |
 | --- | --- | --- |
-| ETI BlueTherm family | ThermaQ Blue, BlueTherm One LE, BlueTherm Probe, Thermapen Blue, TempTest Blue, ThermoWorks BlueDOT | ETI "ETIBLUETHERM" GATT service `45544942-4c55-4554-4845-524db87ad700`; channel 1 notifies a little-endian float32 °C |
+| ETI / ThermoWorks Blue instruments | Thermapen ONE Blue, Thermapen Blue, ThermaQ Blue, BlueTherm One LE, TempTest Blue, RayTemp Blue | ETI BlueTherm LE service `45544942-4c55-4554-4845-524db87ad700`. Sensor reading `…d701` (float32 °C), commands and notifications `…d705` (MEASURE/TRANSFER button, identify, read now), instrument settings `…d709` (measurement interval). Battery and device information from the standard services. |
 | Standard Health Thermometer | Any device implementing Bluetooth SIG service 0x1809 | Temperature Measurement 0x2A1C / Intermediate 0x2A1E, IEEE 11073 FLOAT |
 | Standard Environmental Sensing | Any device implementing service 0x181A | Temperature 0x2A6E, int16 in 0.01 °C |
-| Simulator | Built in | Realistic warm-up / cool-down curves for training and tests |
+| Simulator | Built in | Realistic warm-up / cool-down curves and a virtual probe button, for training and tests |
 
-The ETI protocol constants come from an open-source implementation (Beanconqueror's ETI driver) and
-match the ETI BLE family that the hosted Legionella Dossier app pairs with. It has not yet been
-exercised against a physical ETI probe from this codebase: the first job on site is to pair one on the
-Probe page and confirm readings stream. Adding another instrument is one driver object in
-`packages/core/src/ble/drivers.ts`.
+The ETI characteristic layout and codes match ETI's own ThermaLib Android SDK (BLE protocol R1.1).
+ThermoWorks states the Thermapen ONE Blue is backwards compatible with that protocol. The ONE Blue's
+enhanced display features (task text and limits on the probe screen) need ThermoWorks' newer protocol
+document, which they give integrators on request. ThermoWorks' BlueDOT uses a different service and is
+not supported.
+
+The probe's MEASURE/TRANSFER button drives the task runner: the first press starts the timed run, the
+next press records it. The Probe page shows model, firmware, battery and measurement interval, can set
+1-second readings, and has a diagnostics log of raw frames for first contact with a new instrument.
+Adding another instrument is one driver object in `packages/core/src/ble/drivers.ts`.
 
 Browser support: Chrome or Edge on Android, Windows, macOS and ChromeOS, over HTTPS (or
-localhost). Safari on iOS has no Web Bluetooth; the Bluefy browser works there.
+localhost). Safari and Chrome on iOS have no Web Bluetooth; the Bluefy browser works there.
+
+**Trying it on a phone:** [docs/phone-testing.md](docs/phone-testing.md) covers GitHub Codespaces
+(nothing to install), Android over USB, and a temporary HTTPS tunnel, then connecting the Thermapen.
 
 ## Repository layout
 
 ```
-packages/core   Domain model, HSG274 catalogue, scheduler, compliance rules, BLE parsers, capture logic (pure TS, unit tested)
-apps/api        Fastify REST API on SQLite (node:sqlite, no native build), demo seed, serves the built web app
-apps/web        React PWA: Web Bluetooth runtime, simulator, task runner, offline queue
-scripts         End-to-end smoke test (Playwright against the seeded API)
+packages/core   Domain model, HSG274 catalogue, scheduler, compliance rules, BLE parsers, capture logic,
+                spreadsheet readers (xlsx, csv, OSLC JSON) and the TRIRIGA import planner (pure TS, unit tested)
+apps/api        Fastify REST API on SQLite (node:sqlite, no native build), migrations, import/export, demo seed
+apps/web        React PWA: Web Bluetooth runtime, simulator, task runner, offline queue, TRIRIGA import
+scripts         End-to-end smoke test (Playwright against the seeded API), TRIRIGA sample generator
+docs            Phone testing guide, TRIRIGA guide and sample exports
+.devcontainer   GitHub Codespaces setup: builds and starts the app on port 3000
 ```
 
 Data flow: probe → `WebBluetoothProbe` (GATT notifications) → `TemperatureCapture` (timing, target,
@@ -125,5 +137,5 @@ certificate is enough) before handing phones to engineers.
 ## Not built yet
 
 Users and sign-in, PostgreSQL, the written scheme / risk assessment module, photos on tasks, PDF
-reports, sample results entry, and a native wrapper for iOS. The API is small enough that these bolt
-onto the existing tables.
+reports, sample results entry, a live TRIRIGA OSLC sync, the Thermapen ONE Blue enhanced display, and
+a native wrapper for iOS. The API is small enough that these bolt onto the existing tables.
