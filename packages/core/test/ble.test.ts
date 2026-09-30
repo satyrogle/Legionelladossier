@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   ETI_DRIVER,
+  encodeEtiCommand,
+  encodeEtiNotification,
+  parseBatteryLevel,
+  parseEtiInstrumentSettings,
+  parseEtiNotification,
+  withEtiMeasurementInterval,
+  decodeUtf8,
+  toHex,
   HTS_DRIVER,
   candidateDrivers,
   encodeEtiTemperature,
@@ -72,6 +80,7 @@ describe('ETI BlueTherm', () => {
   });
 
   it('rejects open-circuit and garbage frames', () => {
+    expect(parseEtiTemperature(view([0xff, 0xff, 0xff, 0xff]))).toBeNull(); // SDK "no reading" marker
     expect(parseEtiTemperature(encodeEtiTemperature(Number.NaN))).toBeNull();
     expect(parseEtiTemperature(encodeEtiTemperature(9999))).toBeNull();
     expect(parseEtiTemperature(view([0x01, 0x02]))).toBeNull();
@@ -82,6 +91,9 @@ describe('ETI BlueTherm', () => {
     expect(isEtiDeviceName('ThermaQ Blue 1234')).toBe(true);
     expect(isEtiDeviceName('BlueTherm Probe')).toBe(true);
     expect(isEtiDeviceName('Thermapen Blue')).toBe(true);
+    expect(isEtiDeviceName('Thermapen ONE Blue')).toBe(true);
+    expect(isEtiDeviceName('RayTemp Blue')).toBe(true);
+    expect(isEtiDeviceName('BlueDOT 1234')).toBe(false); // BlueDOT uses a different ThermoWorks service
     expect(isEtiDeviceName('Testo 105')).toBe(false);
     expect(isEtiDeviceName(undefined)).toBe(false);
   });
@@ -100,5 +112,55 @@ describe('driver registry', () => {
     expect(opts.filters.some((f) => f.namePrefix === 'Thermaq')).toBe(true);
     expect(opts.optionalServices).toContain('00001809-0000-1000-8000-00805f9b34fb');
     expect(new Set(opts.optionalServices).size).toBe(opts.optionalServices.length);
+  });
+});
+
+describe('ETI commands and notifications (…d705)', () => {
+  it('decodes notification codes as uint16 little-endian', () => {
+    expect(parseEtiNotification(view([0x01, 0x00]))).toEqual({ code: 1, type: 'button_pressed' });
+    expect(parseEtiNotification(view([0x02, 0x00])).type).toBe('shutdown');
+    expect(parseEtiNotification(view([0x05, 0x00])).type).toBe('request_refresh');
+    expect(parseEtiNotification(view([0x09, 0x00])).type).toBe('unknown');
+    expect(parseEtiNotification(view([])).type).toBe('none');
+  });
+
+  it('maps notifications to probe events through the driver', () => {
+    const cmd = ETI_DRIVER.commands!;
+    expect(cmd.parseNotification(encodeEtiNotification(1))).toEqual({ type: 'button', code: 1, label: 'Button pressed' });
+    expect(cmd.parseNotification(encodeEtiNotification(2))?.type).toBe('shutdown');
+    expect(cmd.parseNotification(encodeEtiNotification(0))).toBeNull();
+  });
+
+  it('encodes only the safe commands', () => {
+    expect(Array.from(encodeEtiCommand('measure'))).toEqual([0x10, 0x00]);
+    expect(Array.from(encodeEtiCommand('identify'))).toEqual([0x20, 0x00]);
+    // @ts-expect-error factory reset is intentionally not exposed
+    expect(() => encodeEtiCommand('factoryReset')).toThrow();
+  });
+});
+
+describe('ETI instrument settings (…d709)', () => {
+  const block = view([0x00, 0x05, 0x00, 0x0a, 0x00, 0x03, 0x00, 0x5f]);
+
+  it('parses unit, measurement interval and auto-off', () => {
+    expect(parseEtiInstrumentSettings(block)).toEqual({ unit: 'C', measurementIntervalS: 5, autoOffInterval: 10 });
+    expect(parseEtiInstrumentSettings(view([0x01, 0x01, 0x00, 0x00, 0x00]))?.unit).toBe('F');
+    expect(parseEtiInstrumentSettings(view([0x00, 0x01]))).toBeNull();
+  });
+
+  it('rewrites only the measurement interval', () => {
+    const next = withEtiMeasurementInterval(block, 1);
+    expect(Array.from(next)).toEqual([0x00, 0x01, 0x00, 0x0a, 0x00, 0x03, 0x00, 0x5f]);
+    expect(() => withEtiMeasurementInterval(block, 0)).toThrow();
+    expect(() => withEtiMeasurementInterval(view([0x00]), 1)).toThrow();
+  });
+});
+
+describe('standard characteristics', () => {
+  it('reads battery, strings and hex', () => {
+    expect(parseBatteryLevel(view([87]))).toBe(87);
+    expect(parseBatteryLevel(view([200]))).toBeNull();
+    expect(decodeUtf8(view([0x54, 0x50, 0x31, 0x00, 0x00]))).toBe('TP1');
+    expect(toHex(view([0x01, 0xab]))).toBe('01 ab');
   });
 });

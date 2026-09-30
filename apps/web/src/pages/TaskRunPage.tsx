@@ -20,6 +20,10 @@ export function TaskRunPage() {
   const [busy, setBusy] = useState(false);
   const [flushStart, setFlushStart] = useState<number | null>(null);
   const [flushElapsed, setFlushElapsed] = useState(0);
+  const [runningChannel, setRunningChannel] = useState<string | null>(null);
+  const onRunningChange = useCallback((channel: string, running: boolean) => {
+    setRunningChannel((current) => (running ? channel : current === channel ? null : current));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -55,6 +59,12 @@ export function TaskRunPage() {
   }, [detail, queued, taskId]);
 
   const evaluation = useMemo(() => (detail ? evaluateTask(detail.template, detail.site, localReadings) : null), [detail, localReadings]);
+  // The probe button drives one card at a time: the running one, else the first rule still without a reading.
+  const buttonChannel = useMemo(() => {
+    if (!detail) return null;
+    if (runningChannel) return runningChannel;
+    return detail.template.rules.find((r) => !localReadings.some((x) => x.channel === r.channel))?.channel ?? null;
+  }, [detail, runningChannel, localReadings]);
   const queuedCompletion = queued.some((q) => q.kind === 'complete' || q.kind === 'skip');
   const closed = detail ? detail.task.status === 'completed' || detail.task.status === 'failed' || detail.task.status === 'skipped' : false;
 
@@ -178,6 +188,8 @@ export function TaskRunPage() {
           finding={evaluation.findings.find((f) => f.channel === rule.channel)}
           engineer={engineer}
           disabled={closed || queuedCompletion}
+          buttonTarget={buttonChannel === rule.channel}
+          onRunningChange={onRunningChange}
           onRecord={recordReading}
         />
       ))}

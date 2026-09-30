@@ -4,13 +4,14 @@ import { useSync } from '../state/sync.jsx';
 
 /** Status strip under the top bar: connection, live temperature, offline queue. */
 export function ProbeBar() {
-  const { probe, status, latest } = useProbe();
+  const { probe, status, latest, info } = useProbe();
   const { online, pending, syncing } = useSync();
   return (
     <div className="statusline">
       <Link to="/devices" className="pill pill-light">
         {probe && status === 'connected' ? `${probe.name}: ${latest ? `${latest.celsius.toFixed(1)} °C` : 'waiting…'}` : probe && status === 'connecting' ? 'Connecting probe…' : 'No probe'}
       </Link>
+      {probe && status === 'connected' && info?.batteryPct != null && info.batteryPct <= 20 && <span className="pill pill-light">probe battery {info.batteryPct}%</span>}
       <span className="pill pill-light">{online ? 'online' : 'offline'}</span>
       {(pending > 0 || syncing) && <span className="pill pill-light">{syncing ? 'syncing…' : `${pending} queued`}</span>}
     </div>

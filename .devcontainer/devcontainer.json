@@ -1,0 +1,20 @@
+{
+  "name": "Legionella Dossier",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "postCreateCommand": "npm install -g pnpm@10.33.0 && pnpm install --frozen-lockfile && pnpm build",
+  "postAttachCommand": {
+    "app": "pnpm start"
+  },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Legionella Dossier",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "codespaces": {
+      "openFiles": ["docs/phone-testing.md"]
+    }
+  }
+}

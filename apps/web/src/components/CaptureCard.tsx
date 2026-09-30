@@ -3,6 +3,7 @@ import { CHANNEL_LABELS, TemperatureCapture, describeRule, targetFor, type Captu
 import { Link } from 'react-router';
 import type { ReadingInput } from '../api/client.js';
 import { useProbe } from '../state/probe.jsx';
+import { useWakeLock } from '../state/useWakeLock.js';
 import { Sparkline } from './Sparkline.jsx';
 
 interface Props {
@@ -12,8 +13,14 @@ interface Props {
   finding?: Finding;
   engineer: string;
   disabled?: boolean;
+  /** This card answers the probe's button (only one card on a page does). */
+  buttonTarget?: boolean;
+  onRunningChange?: (channel: TemperatureRule['channel'], running: boolean) => void;
   onRecord: (reading: ReadingInput) => Promise<void>;
 }
+
+/** Ignore a second button event within this window (switch bounce, double notifications). */
+const BUTTON_DEBOUNCE_MS = 800;
 
 function fmtClock(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -35,8 +42,8 @@ function downsample<T>(items: readonly T[], max: number): T[] {
  * outlet; the card times the run, flags when the target is met, calls pass / fail against the
  * HSG274 limit, and records the reading when the temperature has stabilised.
  */
-export function CaptureCard({ rule, site, existing, finding, engineer, disabled, onRecord }: Props) {
-  const { probe, status, latest } = useProbe();
+export function CaptureCard({ rule, site, existing, finding, engineer, disabled, buttonTarget, onRunningChange, onRecord }: Props) {
+  const { probe, status, latest, info, onProbeEvent, pressSimulatedButton } = useProbe();
   const captureRef = useRef<TemperatureCapture | null>(null);
   const [snap, setSnap] = useState<CaptureSnapshot | null>(null);
   const [running, setRunning] = useState(false);
@@ -47,6 +54,12 @@ export function CaptureCard({ rule, site, existing, finding, engineer, disabled,
   const target = targetFor(rule, site);
   const timed = rule.withinSeconds !== undefined;
   const connected = probe !== null && status === 'connected';
+  const lastButtonAt = useRef(0);
+  useWakeLock(running);
+
+  useEffect(() => {
+    onRunningChange?.(rule.channel, running);
+  }, [running, rule.channel, onRunningChange]);
 
   const finish = useCallback(async () => {
     const cap = captureRef.current;
@@ -127,6 +140,24 @@ export function CaptureCard({ rule, site, existing, finding, engineer, disabled,
     setRunning(true);
   };
 
+  // The probe's MEASURE/TRANSFER button: first press starts the run, the next press records it.
+  const startRef = useRef(start);
+  startRef.current = start;
+  useEffect(() => {
+    if (!buttonTarget) return;
+    return onProbeEvent((e) => {
+      if (e.type !== 'button') return;
+      const now = performance.now();
+      if (now - lastButtonAt.current < BUTTON_DEBOUNCE_MS) return;
+      lastButtonAt.current = now;
+      if (captureRef.current?.isRunning) {
+        if ((captureRef.current.snapshot(now).sampleCount ?? 0) > 0) void finish();
+      } else if (connected && !disabled && !saving) {
+        startRef.current();
+      }
+    });
+  }, [buttonTarget, onProbeEvent, finish, connected, disabled, saving]);
+
   const recordManual = async () => {
     const v = Number(manual);
     if (!Number.isFinite(v)) return;
@@ -192,6 +223,12 @@ export function CaptureCard({ rule, site, existing, finding, engineer, disabled,
         </div>
       )}
 
+      {connected && buttonTarget && info?.supportsButton && (
+        <p className="small muted" data-testid="button-hint">
+          {running ? 'Press the probe button to record now.' : 'Press the probe button to start the run.'}
+        </p>
+      )}
+
       {!connected && (
         <p className="small muted">
           No probe connected. <Link to="/devices">Connect a Bluetooth probe</Link> or enter the reading by hand below.
@@ -218,6 +255,11 @@ export function CaptureCard({ rule, site, existing, finding, engineer, disabled,
             }}
           >
             Cancel
+          </button>
+        )}
+        {probe?.kind === 'simulator' && buttonTarget && connected && (
+          <button className="btn btn-sm" onClick={pressSimulatedButton} data-testid="sim-probe-button" title="Acts like the MEASURE/TRANSFER button on a Thermapen">
+            Simulate probe button
           </button>
         )}
         <label className="check small" style={{ marginLeft: 'auto' }}>
